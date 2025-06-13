@@ -12,6 +12,9 @@ class UCameraComponent;
 class UInputAction;
 struct FInputActionValue;
 
+//C_CMC
+class UCustomCharacterMovementComponent;
+
 DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
 
 /**
@@ -37,6 +40,15 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Input")
 	UInputAction* JumpAction;
 
+public:
+	//bool to take more control of the jump function
+	bool bPressedCustomJump;
+
+	virtual void Jump() override;
+	virtual void StopJumping() override;
+
+protected:
+
 	/** Move Input Action */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Input")
 	UInputAction* MoveAction;
@@ -49,12 +61,19 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category="Input")
 	UInputAction* MouseLookAction;
 
+	/** Sprint Input Action */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = Input, meta = (AllowPrivateAccess = "true"))
+	UInputAction* SprintAction;
+
 public:
 
 	/** Constructor */
-	ACustomCMCCharacter();	
+	ACustomCMCCharacter(const FObjectInitializer& ObjectInitializer);	
+
 
 protected:
+	/** Init CustomMovementComponent */
+	UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category=Movement) UCustomCharacterMovementComponent* CustomCharacterMovementComponent;
 
 	/** Initialize input action bindings */
 	virtual void SetupPlayerInputComponent(class UInputComponent* PlayerInputComponent) override;
@@ -63,6 +82,9 @@ protected:
 
 	/** Called for movement input */
 	void Move(const FInputActionValue& Value);
+
+	void HandleGroundMovementInput(const FInputActionValue& Value);
+	void HandleClimbMovementInput(const FInputActionValue& Value);
 
 	/** Called for looking input */
 	void Look(const FInputActionValue& Value);
@@ -92,5 +114,9 @@ public:
 
 	/** Returns FollowCamera subobject **/
 	FORCEINLINE class UCameraComponent* GetFollowCamera() const { return FollowCamera; }
+
+	FCollisionQueryParams GetIgnoreCharacterParams() const;
+
+	FORCEINLINE UCustomCharacterMovementComponent* GetCustomMovementComponent() const {return CustomCharacterMovementComponent;}
 };
 

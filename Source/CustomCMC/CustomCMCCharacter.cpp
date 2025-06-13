@@ -1,6 +1,8 @@
 // Copyright Epic Games, Inc. All Rights Reserved.
 
 #include "CustomCMCCharacter.h"
+
+#include "CustomCharacterMovementComponent.h"
 #include "Engine/LocalPlayer.h"
 #include "Camera/CameraComponent.h"
 #include "Components/CapsuleComponent.h"
@@ -13,8 +15,29 @@
 
 DEFINE_LOG_CATEGORY(LogTemplateCharacter);
 
-ACustomCMCCharacter::ACustomCMCCharacter()
+void ACustomCMCCharacter::Jump()
 {
+	Super::Jump();
+	
+	bPressedCustomJump = true;
+
+	//Stop Character From Performing Jump Before Executing Mantle Logic
+	bPressedJump = false;
+}
+
+void ACustomCMCCharacter::StopJumping()
+{
+	Super::StopJumping();
+	bPressedCustomJump = false;
+}
+
+ACustomCMCCharacter::ACustomCMCCharacter(const FObjectInitializer& ObjectInitializer)
+: Super(ObjectInitializer.SetDefaultSubobjectClass<UCustomCharacterMovementComponent>(ACharacter::CharacterMovementComponentName))
+{
+
+	CustomCharacterMovementComponent = Cast<UCustomCharacterMovementComponent>(GetCharacterMovement());
+	CustomCharacterMovementComponent->SetIsReplicated(true);
+	
 	// Set size for collision capsule
 	GetCapsuleComponent()->InitCapsuleSize(42.f, 96.0f);
 		
@@ -66,6 +89,10 @@ void ACustomCMCCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInput
 
 		// Looking
 		EnhancedInputComponent->BindAction(LookAction, ETriggerEvent::Triggered, this, &ACustomCMCCharacter::Look);
+
+		// Sprinting
+		EnhancedInputComponent->BindAction(SprintAction, ETriggerEvent::Started, CustomCharacterMovementComponent, &UCustomCharacterMovementComponent::SprintPressed);
+		EnhancedInputComponent->BindAction(SprintAction, ETriggerEvent::Completed, CustomCharacterMovementComponent, &UCustomCharacterMovementComponent::SprintReleased);
 	}
 	else
 	{
@@ -75,11 +102,40 @@ void ACustomCMCCharacter::SetupPlayerInputComponent(UInputComponent* PlayerInput
 
 void ACustomCMCCharacter::Move(const FInputActionValue& Value)
 {
+	if(!CustomCharacterMovementComponent) return;
+
+	if(CustomCharacterMovementComponent->IsHanging())
+	{
+		HandleClimbMovementInput(Value);
+	}
+	else
+	{
+		HandleGroundMovementInput(Value);
+	}
+}
+
+void ACustomCMCCharacter::HandleGroundMovementInput(const FInputActionValue& Value)
+{
 	// input is a Vector2D
 	FVector2D MovementVector = Value.Get<FVector2D>();
 
 	// route the input
 	DoMove(MovementVector.X, MovementVector.Y);
+}
+
+void ACustomCMCCharacter::HandleClimbMovementInput(const FInputActionValue& Value)
+{
+
+	const FVector2D MovementVector = Value.Get<FVector2D>();
+	// Fetch the LedgeTangent direction FROM Custom CMC
+	const FVector LedgeTangent = CustomCharacterMovementComponent->GetCurrentLedgeTangent();
+	
+	// X axis input → shimmy left/right along the ledge
+	
+	AddMovementInput( LedgeTangent, MovementVector.X );
+
+	// Y axis input →  move up/down the wall 
+	AddMovementInput( FVector::UpVector, MovementVector.Y );
 }
 
 void ACustomCMCCharacter::Look(const FInputActionValue& Value)
@@ -132,3 +188,17 @@ void ACustomCMCCharacter::DoJumpEnd()
 	// signal the character to stop jumping
 	StopJumping();
 }
+
+
+FCollisionQueryParams ACustomCMCCharacter::GetIgnoreCharacterParams() const
+{
+	FCollisionQueryParams Params;
+
+	TArray<AActor*> CharacterChildren;
+	GetAllChildActors(CharacterChildren);
+	Params.AddIgnoredActors(CharacterChildren);
+	Params.AddIgnoredActor(this);
+
+	return Params;
+}
+
