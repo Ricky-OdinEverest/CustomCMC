@@ -22,6 +22,7 @@ enum ECustomMovementMode
 	CMOVE_None			UMETA(Hidden),
 	CMOVE_Slide			UMETA(DisplayName = "Slide"),
 	CMOVE_Hang			UMETA(DisplayName = "Hang"),
+	CMOVE_VertWallRun   UMETA(DisplayName = "VertWallRun"),
 	CMOVE_MAX			UMETA(Hidden),
 };
 
@@ -61,6 +62,9 @@ private:
 		//Flags
 		uint8 Saved_bWantsToSprint:1;
 		uint8 Saved_bPressedCustomJump:1;
+		uint8 Saved_bWantsToMantle:1;
+		
+		uint8 Saved_bVertWallRun:1;
 		
 
 		uint8 Saved_bHadAnimRootMotion:1;
@@ -98,6 +102,23 @@ private:
 
 protected:
 
+	/**
+	UFUNCTION(BlueprintCallable, Category="Pawn|Components|CharacterMovement")
+	ENGINE_API virtual float GetMaxAcceleration() const;
+
+	Returns maximum deceleration for the current state when braking (ie when there is no acceleration). 
+	UFUNCTION(BlueprintCallable, Category="Pawn|Components|CharacterMovement")
+	ENGINE_API virtual float GetMaxBrakingDeceleration() const;
+
+	Returns current acceleration, computed from input vector each update. 
+	UFUNCTION(BlueprintCallable, Category="Pawn|Components|CharacterMovement", meta=(Keywords="Acceleration GetAcceleration"))
+	ENGINE_API FVector GetCurrentAcceleration() const;
+	
+	ENGINE_API virtual void ApplyDownwardForce(float DeltaSeconds);
+	
+	*/
+
+	virtual float GetMaxAcceleration() const override;
 
 	virtual void UpdateFromCompressedFlags(uint8 Flags) override;
 	
@@ -138,11 +159,17 @@ protected:
 	//Flags
 	bool Safe_bWantsToSprint;
 	bool Safe_bHadAnimRootMotion;
+
+	// investigae how Ledge Grab is handled here
+	bool Safe_bWantsToMantle;
+
+	bool Safe_bVertWallRun;
 	
 	bool Safe_bTransitionFinished;
 	TSharedPtr<FRootMotionSource_MoveToForce> TransitionRMS;
 	UPROPERTY(Transient) UAnimMontage* TransitionQueuedMontage;
 	float TransitionQueuedMontageSpeed;
+	FString TransitionName;
 	int TransitionRMS_ID;
 	
 	UPROPERTY(EditDefaultsOnly)
@@ -196,14 +223,40 @@ protected:
 	UPROPERTY(EditDefaultsOnly)
 	float LedgeGrabXOffset = -10.f;
 
-	float LedgeGrabSpeed = 100.f;
+	float LedgeGrabSpeed = 110.f;
 	float LedgeBrakingDeceleration = 10000.f;
 # pragma endregion LedgeGrabVariables
+
+	// Wall run Variables
+	//Min speed to START RUN
+	UPROPERTY(EditDefaultsOnly) float MinWallRunSpeed=200.f;
+	// mAX sPEED ALONG WALL
+	UPROPERTY(EditDefaultsOnly) float MaxWallRunSpeed=800.f;
+	// Clamp Vertical speed and condition negative speed
+	UPROPERTY(EditDefaultsOnly) float MaxVerticalWallRunSpeed=200.f;
+	// allow player to pull out of wall run under the given angle
+	UPROPERTY(EditDefaultsOnly) float WallRunPullAwayAngle=75;
+	// Pull player to wall with the given height
+	UPROPERTY(EditDefaultsOnly) float WallAttractionForce = 200.f;
+	// Requires Player to be this many units of the ground
+	UPROPERTY(EditDefaultsOnly) float MinWallRunHeight=50.f;
+	//Gravity based on input and velocity
+	UPROPERTY(EditDefaultsOnly) UCurveFloat* WallRunGravityScaleCurve;
+	// horozontal jump off force
+	UPROPERTY(EditDefaultsOnly) float WallJumpOffForce = 300.f;
+
+	// Wall Run Functions
+	UFUNCTION(BlueprintPure)
+	bool IsVertWallRunning() const { return IsCustomMovementMode(CMOVE_VertWallRun); }
+	//UFUNCTION(BlueprintPure)
+	//bool WallRunningIsRight() const { return Safe_bWallRunIsRight; }
+	
 
 	UPROPERTY(Transient)
 	class ACustomCMCCharacter* CustomCharacterOwner;
 	// LedgeGrab 
 	bool TryLedgeGrab();
+	bool TryMantle();
 	void PhysHang(float deltaTime, int32 Iterations);
 
 	FVector GetLedgeGrabStartLocation(FHitResult FrontHit, FHitResult SurfaceHit) const;
@@ -259,10 +312,8 @@ private:
 	UFUNCTION()
 	void OnRep_LedgeGrab();
 
-	// Ledge Detection Experiment
+	// Ledge Detection Experiment seems to work
 	FVector CurrentLedgeTangent;
-
-	
 
 
 	// Climb Project Functions and variables
@@ -275,6 +326,8 @@ private:
 	TArray<FHitResult> ClimbableSurfacesTracedResults;
 
 	FVector CurrentClimbableSurfaceLocation;
+
+	
 	
 	UPROPERTY(EditDefaultsOnly,BlueprintReadOnly,Category = "Character Movement: Climbing",meta = (AllowPrivateAccess = "true"))
 	TArray<TEnumAsByte<EObjectTypeQuery> > ClimbableSurfaceTraceTypes;
@@ -284,5 +337,12 @@ private:
 
 	UPROPERTY(EditDefaultsOnly,BlueprintReadOnly,Category = "Character Movement: Climbing",meta = (AllowPrivateAccess = "true"))
 	float ClimbCapsuleTraceHalfHeight = 72.f;
+
+
+	// Wall Run
+
+	bool TryVertWallRun();
+	//UpdatesPhysics every frame
+	void PhysVertWallRun(float deltaTime, int32 Iterations);
 	
 };

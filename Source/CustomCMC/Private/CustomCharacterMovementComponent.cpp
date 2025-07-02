@@ -11,7 +11,7 @@
 #include "Kismet/KismetMathLibrary.h"
 #include "Kismet/KismetSystemLibrary.h"
 
-#if 0
+#if 1
 float MacroDuration = 2.f;
 #define SLOG(x) GEngine->AddOnScreenDebugMessage(-1, MacroDuration ? MacroDuration : -1.f, FColor::Yellow, x);
 #define POINT(x, c) DrawDebugPoint(GetWorld(), x, 10, c, !MacroDuration, MacroDuration);
@@ -54,7 +54,7 @@ void UCustomCharacterMovementComponent::UpdateCharacterStateAfterMovement(float 
 	if (!HasAnimRootMotion() && Safe_bHadAnimRootMotion && IsMovementMode(MOVE_Flying))
 	{
 		UE_LOG(LogTemp, Warning, TEXT("Ending Anim Root Motion"))
-		//SetMovementMode(MOVE_Walking);
+		SetMovementMode(MOVE_Walking);
 	}
 	// Set transision finished to true and
 	if (GetRootMotionSourceByID(TransitionRMS_ID) && GetRootMotionSourceByID(TransitionRMS_ID)->Status.HasFlag(ERootMotionSourceStatusFlags::Finished))
@@ -77,6 +77,24 @@ bool UCustomCharacterMovementComponent::CanCrouchInCurrentState() const
 	return Super::CanCrouchInCurrentState();
 }
 
+float UCustomCharacterMovementComponent::GetMaxAcceleration() const
+{
+	return Super::GetMaxAcceleration();
+
+	/*if (MovementMode != MOVE_Custom) return Super::GetMaxAcceleration();
+
+	switch (CustomMovementMode)
+	{
+	case CMOVE_Slide:
+		return 0.f;
+	case CMOVE_Hang:
+		return 200.f;
+	default:
+		UE_LOG(LogTemp, Fatal, TEXT("Invalid Movement Mode"))
+		return -1.f;
+	}*/
+}
+
 float UCustomCharacterMovementComponent::GetMaxBrakingDeceleration() const
 {
 	if (MovementMode != MOVE_Custom) return Super::GetMaxBrakingDeceleration();
@@ -87,6 +105,8 @@ float UCustomCharacterMovementComponent::GetMaxBrakingDeceleration() const
 		return 0.f;
 	case CMOVE_Hang:
 		return LedgeBrakingDeceleration;
+	case CMOVE_VertWallRun:
+		return 0.f;
 	default:
 		UE_LOG(LogTemp, Fatal, TEXT("Invalid Movement Mode"))
 		return -1.f;
@@ -102,6 +122,8 @@ float UCustomCharacterMovementComponent::GetGravityZ() const
 	{
 	case CMOVE_Hang:
 		return 0.f;
+	case CMOVE_VertWallRun:
+		return Super::GetGravityZ();
 	default:
 		UE_LOG(LogTemp, Fatal, TEXT("Invalid Movement Mode"))
 		return -1.f;
@@ -117,6 +139,9 @@ void UCustomCharacterMovementComponent::PhysCustom(float deltaTime, int32 Iterat
 	{
 	case CMOVE_Hang:
 		PhysHang( deltaTime,  Iterations);
+		break;
+	case CMOVE_VertWallRun:
+		PhysVertWallRun(deltaTime, Iterations);
 		break;
 	default:
 		UE_LOG(LogTemp, Fatal, TEXT("Invalid Movement Mode"))
@@ -137,11 +162,26 @@ void UCustomCharacterMovementComponent::OnMovementModeChanged(EMovementMode Prev
 	{
 		bOrientRotationToMovement = false;
 	}
+	else
+	{
+		bOrientRotationToMovement = true;
+	}
+
+	
+	// Checks if wall is on left or right for the simulated proxy
+	if (IsVertWallRunning() && GetOwnerRole() == ROLE_SimulatedProxy)
+	{
+		/*FVector Start = UpdatedComponent->GetComponentLocation();
+		FVector End = Start + UpdatedComponent->GetRightVector() * CapR() * 2;
+		auto Params = ZippyCharacterOwner->GetIgnoreCharacterParams();
+		FHitResult WallHit;
+		Safe_bWallRunIsRight = GetWorld()->LineTraceSingleByProfile(WallHit, Start, End, "BlockAll", Params);*/
+	}
 }
 
 bool UCustomCharacterMovementComponent::CanAttemptJump() const
 {
-	return Super::CanAttemptJump() || IsHanging();
+	return Super::CanAttemptJump() || IsHanging() || IsVertWallRunning();
 }
 
 bool UCustomCharacterMovementComponent::DoJump(bool bReplayingMoves)
@@ -178,7 +218,7 @@ bool UCustomCharacterMovementComponent::TryLedgeGrab()
 	float CosMMSA = FMath::Cos(FMath::DegreesToRadians(LedgeGrabMaxSurfaceAngle));
 	float CosMMAA = FMath::Cos(FMath::DegreesToRadians(LedgeGrabMaxAlignmentAngle));
 
-	SLOG("Starting LedgeGrab Attempt")
+	//SLOG("Starting LedgeGrab Attempt")
 
 	// Check Front Face
 	FHitResult FrontHit;
@@ -196,7 +236,7 @@ bool UCustomCharacterMovementComponent::TryLedgeGrab()
 	// Pipe Symbol is used for the dot product in this context
 	if (FMath::Abs(CosWallSteepnessAngle) > CosMMWSA || (Fwd | -FrontHit.Normal) < CosMMAA) return false;
 
-	POINT(FrontHit.Location, FColor::Red);
+	//POINT(FrontHit.Location, FColor::Red);
 
 	// Check Height
 	TArray<FHitResult> HeightHits;
@@ -243,14 +283,14 @@ bool UCustomCharacterMovementComponent::TryLedgeGrab()
 	{
 		CAPSULE(ClearCapLoc, FColor::Green)
 	}
-	SLOG("Can LedgeGrab")
+	//SLOG("Can LedgeGrab")
 	
 	// LedgeGrab Selection
 	//FVector ShortLedgeGrabTarget = GetLedgeGrabStartLocation(FrontHit, SurfaceHit, false);
 	FVector TallLedgeGrabTarget = GetLedgeGrabStartLocation(FrontHit, SurfaceHit);
 	
 	bool bTallLedgeGrab = false;
-	if (IsMovementMode(MOVE_Walking) && Height > CapHH())
+	if (IsMovementMode(MOVE_Falling) && Height > CapHH())
 		bTallLedgeGrab = true;
 	else if (IsMovementMode(MOVE_Falling) && (Velocity | FVector::UpVector) < 0)
 	{
@@ -262,6 +302,18 @@ bool UCustomCharacterMovementComponent::TryLedgeGrab()
 	FVector UpOffset = FVector::UpVector * LedgeGrabZOffset;
 	FVector TransitionTarget = TallLedgeGrabTarget + ForwardOffset + UpOffset;
 	CAPSULE(TransitionTarget, FColor::Yellow)
+
+	//  Exit Early if Capsule Does not fit
+	// Test if character can reach goal
+	// Technically this moves the character in one frame and then decides if they 
+	FTransform CurrentTransform = UpdatedComponent->GetComponentTransform();
+	FHitResult Hit, ReturnHit;
+	SafeMoveUpdatedComponent(TransitionTarget - UpdatedComponent->GetComponentLocation(), UpdatedComponent->GetComponentQuat(), true, Hit);
+	FVector ResultLocation = UpdatedComponent->GetComponentLocation();
+	SafeMoveUpdatedComponent(CurrentTransform.GetLocation() - ResultLocation, UpdatedComponent->GetComponentQuat(), false, ReturnHit);
+	
+	if (!ResultLocation.Equals(TransitionTarget)) return false;
+	
 
 	// Perform Transition to LedgeGrab
 	CAPSULE(UpdatedComponent->GetComponentLocation(), FColor::Red)
@@ -278,8 +330,9 @@ bool UCustomCharacterMovementComponent::TryLedgeGrab()
 	TransitionRMS->AccumulateMode = ERootMotionAccumulateMode::Override;
 
 	// Set duration based on distance to target. May need to be scaled up or down given current values between .1 and .25
-	TransitionRMS->Duration = FMath::Clamp(TransDistance / 500.f, .1f, .25f);
+	TransitionRMS->Duration = FMath::Clamp(TransDistance / 500.f, .1f, .5f);
 	SLOG(FString::Printf(TEXT("Duration: %f"), TransitionRMS->Duration))
+	SLOG(FString::Printf(TEXT("TransDistance: %f"), TransDistance))
 
 	TransitionRMS->StartLocation = UpdatedComponent->GetComponentLocation();
 	TransitionRMS->TargetLocation = TransitionTarget;
@@ -289,6 +342,8 @@ bool UCustomCharacterMovementComponent::TryLedgeGrab()
 	// Flying helps with three dimensional root motion but I may be able to do it with a custom climbing mode
 	SetMovementMode(MOVE_Flying);
 	TransitionRMS_ID = ApplyRootMotionSource(TransitionRMS);
+
+	TransitionName = "LedgeGrab";
 	
 	// cache the exact ledge direction for PhysHang:
 	CurrentLedgeTangent = FVector::CrossProduct(SurfaceHit.Normal, FrontHit.Normal).GetSafeNormal();
@@ -327,8 +382,9 @@ bool UCustomCharacterMovementComponent::TryLedgeGrab()
 			);
 		}
 	}
-	FQuat NewRotation = FRotationMatrix::MakeFromXZ(-FrontHit.Normal, FVector::UpVector).ToQuat();
-	SafeMoveUpdatedComponent(FVector::ZeroVector, NewRotation, false, FrontHit);
+	// 5:41 6/30 comment
+	/*FQuat NewRotation = FRotationMatrix::MakeFromXZ(-FrontHit.Normal, FVector::UpVector).ToQuat();
+	SafeMoveUpdatedComponent(FVector::ZeroVector, NewRotation, false, FrontHit);*/
 
 
 	
@@ -349,15 +405,109 @@ bool UCustomCharacterMovementComponent::TryLedgeGrab()
 	CurrentLedgeWallNormal = FrontHit.Normal;
 	CurrentLedgeTopNormal  = SurfaceHit.Normal;
 
-	
-	SetMovementMode(MOVE_Custom, CMOVE_Hang);
-	bOrientRotationToMovement = false;
+	// MoveToUpdateBeforeMovement
+	/*SetMovementMode(MOVE_Custom, CMOVE_Hang);
+	bOrientRotationToMovement = false;*/
 
 	return true;
 }
 
+bool UCustomCharacterMovementComponent::TryMantle()
+{
+	
+	if (!IsCustomMovementMode(CMOVE_Hang)) return false;
+	
+	// Helper Variables
+	// Baser Loc At Character Eye Height
+	FVector BaseLoc = UpdatedComponent->GetComponentLocation() + UpdatedComponent->GetUpVector() * CharacterOwner->BaseEyeHeight;
+	// Direction Vector
+	FVector Fwd = UpdatedComponent->GetForwardVector().GetSafeNormal2D();
+	// Ignore Character and Components
+	auto Params = CustomCharacterOwner->GetIgnoreCharacterParams();
+	//probably irrelevant for mantle
+	float MaxHeight = CapHH() * 2+ LedgeGrabReachHeight;
+
+	
+	float CosMMWSA = FMath::Cos(FMath::DegreesToRadians(LedgeGrabMinWallSteepnessAngle));
+	float CosMMSA = FMath::Cos(FMath::DegreesToRadians(LedgeGrabMaxSurfaceAngle));
+	float CosMMAA = FMath::Cos(FMath::DegreesToRadians(LedgeGrabMaxAlignmentAngle));
+
+	
+	
+
+
+	// distance for eye line trace
+	const FVector WallEnd = BaseLoc + Fwd * MaxLedgeGrabDistance;
+	
+	// Check Front Face
+	FHitResult FrontHit;
+
+	//removed the velocity clamp
+	//Simply Check forward 20 units
+	float CheckDistance = 50.f;
+	FVector FrontStart = BaseLoc;
+
+	//Do five traces from the center of the body to hands
+	for (int i = 0; i < 6; i++)
+	{
+		LINE(FrontStart, FrontStart + Fwd * CheckDistance, FColor::Red)
+		if (GetWorld()->LineTraceSingleByProfile(FrontHit, FrontStart, FrontStart + Fwd * CheckDistance, "BlockAll", Params)) break;
+		// Ideally I would be performing 5 traces from the center of the body to the hand roughly
+		FrontStart += (FVector::UpVector * 2)  / 5;
+	}
+	// return if no hits. (Probably only possible if I am on a small railing)
+	if (!FrontHit.IsValidBlockingHit()) return false;
+
+//POINT(FrontHit.Location, FColor::Red);
+	
+	// Check Height
+	TArray<FHitResult> HeightHits;
+	FHitResult SurfaceHit;
+	FVector WallUp = FVector::VectorPlaneProject(FVector::UpVector, FrontHit.Normal).GetSafeNormal();
+	float WallCos = FVector::UpVector | FrontHit.Normal;
+	float WallSin = FMath::Sqrt(1 - WallCos * WallCos);
+	FVector TraceStart = FrontHit.Location + Fwd + WallUp * (MaxHeight - (MaxStepHeight - 1)) / WallSin;
+	LINE(TraceStart, FrontHit.Location + Fwd, FColor::Orange)
+	if (!GetWorld()->LineTraceMultiByProfile(HeightHits, TraceStart, FrontHit.Location + Fwd, "BlockAll", Params)) return false;
+	for (const FHitResult& Hit : HeightHits)
+	{
+		if (Hit.IsValidBlockingHit())
+		{
+			SurfaceHit = Hit;
+			break;
+		}
+	}
+	//return if the top of the surface has too great of a slope
+	if (!SurfaceHit.IsValidBlockingHit() || (SurfaceHit.Normal | FVector::UpVector) < CosMMSA) return false;
+	float Height = (SurfaceHit.Location - BaseLoc) | FVector::UpVector;
+
+	POINT(SurfaceHit.Location, FColor::Blue);
+	
+	
+	// Check Clearance
+	float SurfaceCos = FVector::UpVector | SurfaceHit.Normal;
+	float SurfaceSin = FMath::Sqrt(1 - SurfaceCos * SurfaceCos);
+	FVector ClearCapLoc = SurfaceHit.Location + Fwd * CapR() + FVector::UpVector * (CapHH() + 1 + CapR() * 2 * SurfaceSin);
+	FCollisionShape CapShape = FCollisionShape::MakeCapsule(CapR(), CapHH());
+	if (GetWorld()->OverlapAnyTestByProfile(ClearCapLoc, FQuat::Identity, "BlockAll", CapShape, Params))
+	{
+	CAPSULE(ClearCapLoc, FColor::Red)
+		return false;
+	}
+	else
+	{
+	CAPSULE(ClearCapLoc, FColor::Green)
+	}
+	SLOG("Can Mantle")
+	
+
+	return true;
+}
+
+
 void UCustomCharacterMovementComponent::PhysHang(float deltaTime, int32 Iterations)
 {
+	//SLOG("Entered Hang")
 	if (deltaTime < MIN_TICK_TIME)
 	{
 		return;
@@ -389,7 +539,7 @@ void UCustomCharacterMovementComponent::PhysHang(float deltaTime, int32 Iteratio
 		);
 
 		// draw the wall trace in magenta
-		DrawDebugLine(
+		/*DrawDebugLine(
 			GetWorld(),
 			WallStartEye,
 			WallEnd,
@@ -398,7 +548,7 @@ void UCustomCharacterMovementComponent::PhysHang(float deltaTime, int32 Iteratio
 			0.1f,              // life time
 			0,                 // depth priority
 			5.0f               // thickness
-		);
+		);*/
 	}
 
 	// --- 2) Trace the top face (down from just above the wall hit) ---
@@ -422,7 +572,7 @@ void UCustomCharacterMovementComponent::PhysHang(float deltaTime, int32 Iteratio
 			TopHit, TopStart, TopEnd, TEXT("BlockAll"), CustomCharacterOwner->GetIgnoreCharacterParams()
 		);
 
-		// draw the top trace in cyan
+		/*// draw the top trace in cyan
 		DrawDebugLine(
 			GetWorld(),
 			TopStart,
@@ -432,7 +582,7 @@ void UCustomCharacterMovementComponent::PhysHang(float deltaTime, int32 Iteratio
 			0.1f,
 			0,
 			5.0f
-		);
+		);*/
 	}
 
 	// only proceed if we have both normals
@@ -445,13 +595,13 @@ void UCustomCharacterMovementComponent::PhysHang(float deltaTime, int32 Iteratio
 		FVector FreshTangent = FVector::CrossProduct(CurrentLedgeWallNormal, CurrentLedgeTopNormal).GetSafeNormal();
 		CurrentLedgeTangent  = FMath::VInterpTo(CurrentLedgeTangent, FreshTangent, deltaTime, CornerInterpSpeed);
 
-		// debug
-		DrawDebugLine(
-			GetWorld(),
-			UpdatedComponent->GetComponentLocation(),
-			UpdatedComponent->GetComponentLocation() + CurrentLedgeTangent * 200.f,
-			FColor::Magenta, false, 0.1f, 0, 5.f
-		);
+
+	}
+	else
+	{
+		
+		//CustomCharacterOwner->LaunchCharacter(FVector(0.f,0.f,700.f),false, false);
+		
 	}
 	
 	/*Process all the climbable surfaces info*/
@@ -507,54 +657,19 @@ void UCustomCharacterMovementComponent::PhysHang(float deltaTime, int32 Iteratio
 	/*Snap movement to climbable surfaces*/
 	SnapMovementToClimableSurfaces(deltaTime);
 	
-	/*if(CheckHasReachedLedge())
-	{	
-		PlayClimbMontage(ClimbToTopMontage);
-	}*/
-
-
-
-
-	/* Prev Imp with some additions. I may revert back to this
-	// Smoothly blend toward the current surface’s new tangent:
-	
-	// Perform the move
-	bJustTeleported = false;
-	Iterations++;
-	const FVector OldLocation = UpdatedComponent->GetComponentLocation();
-	FHitResult SurfHit, FloorHit;
-	GetWorld()->LineTraceSingleByProfile(SurfHit, OldLocation, OldLocation + UpdatedComponent->GetForwardVector() * MaxLedgeGrabDistance, "BlockAll", CustomCharacterOwner->GetIgnoreCharacterParams());
-	GetWorld()->LineTraceSingleByProfile(FloorHit, OldLocation, OldLocation + FVector::DownVector * CapHH() * 1.2f, "BlockAll", CustomCharacterOwner->GetIgnoreCharacterParams());
-	if (!SurfHit.IsValidBlockingHit() || FloorHit.IsValidBlockingHit())
+	if (GetCurrentAcceleration().Z >= 2000.f && Velocity.Z >= 10.f)
 	{
-		//in on frame you could go from falling to walking
-		SetMovementMode(MOVE_Falling);
-		StartNewPhysics(deltaTime, Iterations);
-		return;
-	}
-	// Apply acceleration
-	CalcVelocity(deltaTime, 0.f, false, GetMaxBrakingDeceleration());
-	Velocity = FVector::VectorPlaneProject(Velocity, SurfHit.Normal);
 
-	// Compute move parameters
-	const FVector Delta = deltaTime * Velocity; // dx = v * dt
-	if (!Delta.IsNearlyZero())
-	{
-		FHitResult Hit;
-		SafeMoveUpdatedComponent(Delta, UpdatedComponent->GetComponentQuat(), true, Hit);
-		FVector WallAttractionDelta = -SurfHit.Normal * 30.f * deltaTime;
-		SafeMoveUpdatedComponent(WallAttractionDelta, UpdatedComponent->GetComponentQuat(), true, Hit);
-	}
+		Safe_bWantsToMantle = true;
 
-	//ik
-	Velocity = (UpdatedComponent->GetComponentLocation() - OldLocation) / deltaTime; // v = dx / dt
-	*/
+	}
 }
 
 FVector UCustomCharacterMovementComponent::GetLedgeGrabStartLocation(FHitResult FrontHit, FHitResult SurfaceHit) const
 {
 	float CosWallSteepnessAngle = FrontHit.Normal | FVector::UpVector;
 	//Probably needs adjusting
+	// where my character is adjusted in position downward
 	float DownDistance =  CapHH() * 2.f;
 	FVector EdgeTangent = FVector::CrossProduct(SurfaceHit.Normal, FrontHit.Normal).GetSafeNormal();
 
@@ -570,13 +685,6 @@ FVector UCustomCharacterMovementComponent::GetLedgeGrabStartLocation(FHitResult 
 		);
 	}
 	
-	DrawDebugLine(
-	GetWorld(),
-	UpdatedComponent->GetComponentLocation(),
-	UpdatedComponent->GetComponentLocation() + EdgeTangent * 1000.0f,
-	FColor::Magenta,
-	false, 1.0f, 0, 10.0f
-);
 
 	FVector LedgeGrabStart = SurfaceHit.Location;
 	LedgeGrabStart += FrontHit.Normal.GetSafeNormal2D() * (2.f + CapR());
@@ -722,9 +830,10 @@ void UCustomCharacterMovementComponent::FSavedMove_Custom::Clear()
 	FSavedMove_Character::Clear();
 
 	Saved_bWantsToSprint = 0;
-
+	Saved_bWantsToMantle = 0;
 	Saved_bHadAnimRootMotion = 0;
 	Saved_bTransitionFinished = 0;
+	Saved_bVertWallRun = 0;
 }
 
 // Can potentially add more of these for modes that need to be continuously updated
@@ -753,6 +862,10 @@ void UCustomCharacterMovementComponent::FSavedMove_Custom::SetMoveFor(ACharacter
 
 	Saved_bHadAnimRootMotion = CharacterMovement->Safe_bHadAnimRootMotion;
 	Saved_bTransitionFinished = CharacterMovement->Safe_bTransitionFinished;
+	
+	Saved_bWantsToMantle = CharacterMovement->Safe_bWantsToMantle;
+
+	Saved_bVertWallRun = CharacterMovement->Safe_bVertWallRun;
 
 }
 
@@ -767,6 +880,10 @@ void UCustomCharacterMovementComponent::FSavedMove_Custom::PrepMoveFor(ACharacte
 
 	CharacterMovement->Safe_bHadAnimRootMotion = Saved_bHadAnimRootMotion;
 	CharacterMovement->Safe_bTransitionFinished = Saved_bTransitionFinished;
+
+	CharacterMovement->Safe_bWantsToMantle = Saved_bWantsToMantle;
+
+	CharacterMovement->Safe_bVertWallRun  = Saved_bVertWallRun;
 
 }
 
@@ -811,6 +928,8 @@ void UCustomCharacterMovementComponent::InitializeComponent()
 	
 	CustomCharacterOwner = Cast<ACustomCMCCharacter>(GetOwner());
 }
+
+
 #pragma endregion NetworkPredictionData
 // FirstThingCalledInPerformMovement
 void UCustomCharacterMovementComponent::UpdateCharacterStateBeforeMovement(float DeltaSeconds)
@@ -824,7 +943,7 @@ void UCustomCharacterMovementComponent::UpdateCharacterStateBeforeMovement(float
 		}
 		else
 		{
-			SLOG("Failed LedgeGrab, Reverting to jump")
+			//SLOG("Failed LedgeGrab, Reverting to jump")
 			CustomCharacterOwner->bPressedCustomJump = false;
 			CharacterOwner->bPressedJump = true;
 			CharacterOwner->CheckJumpInput(DeltaSeconds);
@@ -834,11 +953,58 @@ void UCustomCharacterMovementComponent::UpdateCharacterStateBeforeMovement(float
 	// Transition LedgeGrab
 	if (Safe_bTransitionFinished)
 	{
-		SLOG("Transition Finished")
-		UE_LOG(LogTemp, Warning, TEXT("FINISHED RM"))
-		SetMovementMode(MOVE_Custom, CMOVE_Hang);
+		if (TransitionName == "LedgeGrab")
+		{
+			SetMovementMode(MOVE_Custom, CMOVE_Hang);
+			bOrientRotationToMovement = false;
+			Velocity = FVector::ZeroVector;
+			
+		}
+		else if (TransitionName == "Mantle")
+		{
+			//CharacterOwner->PlayAnimMontage(TallLedgeGrabMontage, 1 / TransitionRMS->Duration);
 
+
+			// setting this further down
+			
+			/*SetMovementMode(MOVE_Flying);
+			CharacterOwner->PlayAnimMontage(TallLedgeGrabMontage, 1 / 1.f);
+			TransitionQueuedMontageSpeed = 0.f;
+			TransitionQueuedMontage = nullptr;*/
+	
+		}
+		else
+		{
+			SetMovementMode(MOVE_Walking);
+		}
 		Safe_bTransitionFinished = false;
+		TransitionName = "";
+	}
+	
+		if(IsCustomMovementMode(CMOVE_Hang) && !HasAnimRootMotion())
+		{
+			if (Safe_bWantsToMantle)
+			{
+				SetMovementMode(MOVE_Flying);
+				CharacterOwner->PlayAnimMontage(TallLedgeGrabMontage, 1.f);
+				TransitionQueuedMontageSpeed = 0.f;
+				TransitionQueuedMontage = nullptr;
+				Safe_bWantsToMantle = false;
+			}
+		}
+
+	if(IsCustomMovementMode(CMOVE_Hang) && bWantsToCrouch)
+	{
+	
+			SetMovementMode(MOVE_Falling);
+			bWantsToCrouch = false;
+	}
+
+	// Wall RunAdd commentMore actions
+	if (IsFalling())
+	{
+		TryVertWallRun();
+		//SLOG("TriedWallRun");
 	}
 	
 	Super::UpdateCharacterStateBeforeMovement(DeltaSeconds);
@@ -864,7 +1030,9 @@ float UCustomCharacterMovementComponent::GetMaxSpeed() const
 	case CMOVE_Slide:
 		return 330.f;
 	case CMOVE_Hang:
-		return LedgeGrabSpeed;
+		return 100.f;
+	case CMOVE_VertWallRun:
+		return MaxWallRunSpeed;
 	default:
 		UE_LOG(LogTemp, Fatal, TEXT("Invalid Movement Mode"))
 		return -1.f;
@@ -980,4 +1148,162 @@ TArray<FHitResult> UCustomCharacterMovementComponent::DoCapsuleTraceMultiByObjec
 	);
 
 	return OutCapsuleTraceHitResults;
+}
+
+bool UCustomCharacterMovementComponent::TryVertWallRun()
+{
+	//Not Falling? cant wall run
+	if (!IsFalling()) return false;
+	// If falling too fast you may not wall run
+	if (Velocity.Z < -MaxVerticalWallRunSpeed) return false;
+	FVector Start = UpdatedComponent->GetComponentLocation();
+	FVector FrontEnd = Start + UpdatedComponent->GetForwardVector() * CapR() * 2;
+	
+	auto Params = CustomCharacterOwner->GetIgnoreCharacterParams();
+	FHitResult FloorHit, WallHit;
+	// Check Player Height
+	if (GetWorld()->LineTraceSingleByProfile(FloorHit, Start, Start + FVector::DownVector * (CapHH() + MinWallRunHeight), "BlockAll", Params))
+	{
+		return false;
+	}
+
+	// Front Ray Cast
+	GetWorld()->LineTraceSingleByProfile(WallHit, Start, FrontEnd, "BlockAll", Params);
+	LINE(Start, FrontEnd, FColor::Orange)
+	if (WallHit.IsValidBlockingHit() ) // && (Velocity | WallHit.Normal) > 0
+	{
+		Safe_bVertWallRun = true;
+		SLOG("if (WallHit.IsValidBlockingHit() && (Velocity | WallHit.Normal) < 0)")
+	}
+	else
+	{
+	   //	SLOG("Wall Run Cast Is False")
+		return false;
+		
+	}
+	
+	// clamp velocity to be parralell with the wall
+	FVector WallUp = FVector::VectorPlaneProject(Velocity, WallHit.Normal);
+	//FVector WallUp = FVector::VectorPlaneProject(FVector::UpVector, WallHit.Normal);
+	if (WallUp.SizeSquared() < pow(MinWallRunSpeed, 2)) return false;
+	
+	// Passed all conditions
+	Velocity = WallUp;
+	// Prevent exagerated vertical and downward movemnt
+	//May have to update or modify climb
+	Velocity.Z = FMath::Clamp(Velocity.Z, 0.f, MaxVerticalWallRunSpeed);
+	SetMovementMode(MOVE_Custom, CMOVE_VertWallRun);
+	SLOG("Starting WallRun")
+	return true;
+}
+
+void UCustomCharacterMovementComponent::PhysVertWallRun(float deltaTime, int32 Iterations)
+{
+		// Substeping covered in prone
+	if (deltaTime < MIN_TICK_TIME)
+	{
+		return;
+	}
+	if (!CharacterOwner || (!CharacterOwner->Controller && !bRunPhysicsWithNoController && !HasAnimRootMotion() && !CurrentRootMotion.HasOverrideVelocity() && (CharacterOwner->GetLocalRole() != ROLE_SimulatedProxy)))
+	{
+		Acceleration = FVector::ZeroVector;
+		Velocity = FVector::ZeroVector;
+		return;
+	}
+	
+	bJustTeleported = false;
+	float remainingTime = deltaTime;
+	// Perform the move
+	// Iterate inside of frame for higher resolution
+	while ( (remainingTime >= MIN_TICK_TIME) && (Iterations < MaxSimulationIterations) && CharacterOwner && (CharacterOwner->Controller || bRunPhysicsWithNoController || (CharacterOwner->GetLocalRole() == ROLE_SimulatedProxy)) )
+	{
+		Iterations++;
+		bJustTeleported = false;
+		//instead of delta time
+		const float timeTick = GetSimulationTimeStep(remainingTime, Iterations);
+		remainingTime -= timeTick;
+		const FVector OldLocation = UpdatedComponent->GetComponentLocation();
+		
+		FVector Start = UpdatedComponent->GetComponentLocation();
+		FVector FrontEnd = Start + UpdatedComponent->GetForwardVector() * CapR() * 2;
+		auto Params = CustomCharacterOwner->GetIgnoreCharacterParams();
+
+		// should work if I pull back
+		float SinPullAwayAngle = FMath::Sin(FMath::DegreesToRadians(WallRunPullAwayAngle));
+		
+		FHitResult WallHit;
+		GetWorld()->LineTraceSingleByProfile(WallHit, Start, FrontEnd, "BlockAll", Params);
+		//  pulling away will exit the run
+		bool bWantsToPullAway = WallHit.IsValidBlockingHit() && !Acceleration.IsNearlyZero() && (Acceleration.GetSafeNormal() | WallHit.Normal) > SinPullAwayAngle;
+		if (!WallHit.IsValidBlockingHit() || bWantsToPullAway)
+		{
+			SetMovementMode(MOVE_Falling);
+			// if you leave the wall start new physics in between the frames
+			StartNewPhysics(remainingTime, Iterations);
+			return;
+		}
+
+		//Actual Physics Below
+		
+		// Clamp Acceleration
+		//FVector WallUp = FVector::VectorPlaneProject(FVector::UpVector, WallHit.Normal);
+		Acceleration = FVector::VectorPlaneProject(Acceleration, WallHit.Normal);
+		// Removing Z acceleration will have to change
+		//Acceleration.Z = 0.f;
+		//Acceleration.Y = 0.f;
+		// Apply acceleration to velocity
+		CalcVelocity(timeTick, 0.f, false, GetMaxBrakingDeceleration());
+		// Project / Clamp Velocity tp Wall normal
+		Velocity = FVector::VectorPlaneProject(Velocity, WallHit.Normal);
+		// The "|" is a dot product operator here
+		// How Much Acceleration is Tangent To the wall
+		float TangentAccel = Acceleration.GetSafeNormal() | Velocity.GetSafeNormal2D();
+		// true if up velocity greater than 0
+		bool bVelUp = Velocity.Z > 0.f;
+
+		// Gravity scales with how much the player is pulling away from the acceleratio
+		Velocity.Z += GetGravityZ() * WallRunGravityScaleCurve->GetFloatValue(bVelUp ? 0.f : TangentAccel) * timeTick;
+
+		// exit if too slow or falling too fast
+		if (Velocity.SizeSquared2D() < pow(MinWallRunSpeed, 2) || Velocity.Z < -MaxVerticalWallRunSpeed)
+		{
+			SetMovementMode(MOVE_Falling);
+			StartNewPhysics(remainingTime, Iterations);
+			return;
+		}
+		
+		// Compute move parameters
+		const FVector Delta = timeTick * Velocity; // dx = v * dt
+		const bool bZeroDelta = Delta.IsNearlyZero();
+		if ( bZeroDelta )
+		{
+			remainingTime = 0.f;
+		}
+		else
+		{
+			FHitResult Hit;
+			SafeMoveUpdatedComponent(Delta, UpdatedComponent->GetComponentQuat(), true, Hit);
+			FVector WallAttractionDelta = -WallHit.Normal * WallAttractionForce * timeTick;
+			SafeMoveUpdatedComponent(WallAttractionDelta, UpdatedComponent->GetComponentQuat(), true, Hit);
+		}
+		if (UpdatedComponent->GetComponentLocation() == OldLocation)
+		{
+			remainingTime = 0.f;
+			break;
+		}
+		//Make Velocity == to how much the Char Actually moved
+		Velocity = (UpdatedComponent->GetComponentLocation() - OldLocation) / timeTick; // v = dx / dt
+	}
+
+	FVector Start = UpdatedComponent->GetComponentLocation();
+	FVector FrontEnd = Start + UpdatedComponent->GetForwardVector() * CapR() * 2;
+	auto Params = CustomCharacterOwner->GetIgnoreCharacterParams();
+	
+	FHitResult FloorHit, WallHit;
+	GetWorld()->LineTraceSingleByProfile(WallHit, Start, FrontEnd, "BlockAll", Params);
+	GetWorld()->LineTraceSingleByProfile(FloorHit, Start, Start + FVector::DownVector * (CapHH() + MinWallRunHeight * .5f), "BlockAll", Params);
+	if (FloorHit.IsValidBlockingHit() || !WallHit.IsValidBlockingHit() || Velocity.SizeSquared2D() < pow(MinWallRunSpeed, 2))
+	{
+		SetMovementMode(MOVE_Falling);
+	}
 }

@@ -108,6 +108,10 @@ void ACustomCMCCharacter::Move(const FInputActionValue& Value)
 	{
 		HandleClimbMovementInput(Value);
 	}
+	else if (CustomCharacterMovementComponent->IsVertWallRunning())
+	{
+		VertWallRunningMovementInput(Value);
+	}
 	else
 	{
 		HandleGroundMovementInput(Value);
@@ -123,6 +127,8 @@ void ACustomCMCCharacter::HandleGroundMovementInput(const FInputActionValue& Val
 	DoMove(MovementVector.X, MovementVector.Y);
 }
 
+
+
 void ACustomCMCCharacter::HandleClimbMovementInput(const FInputActionValue& Value)
 {
 
@@ -134,9 +140,37 @@ void ACustomCMCCharacter::HandleClimbMovementInput(const FInputActionValue& Valu
 	
 	AddMovementInput( LedgeTangent, MovementVector.X );
 
-	// Y axis input →  move up/down the wall 
-	AddMovementInput( FVector::UpVector, MovementVector.Y );
+	// Y axis input →  move up/down the wall
+	if(MovementVector.Y >= 0)
+	{
+		AddMovementInput( FVector::UpVector, MovementVector.Y );
+	}
+	else if (MovementVector.Y < 0)
+	{
+		CustomCharacterMovementComponent->bWantsToCrouch = true;
+	}
+	
 }
+
+void ACustomCMCCharacter::VertWallRunningMovementInput(const FInputActionValue& Value)
+{
+
+	const FVector2D MovementVector = Value.Get<FVector2D>();
+	
+	//AddMovementInput( LedgeTangent, MovementVector.X );
+
+	// Y axis input →  move up/down the wall
+	if(MovementVector.Y >= 0)
+	{
+		AddMovementInput( FVector::UpVector, MovementVector.Y );
+	}
+	else if (MovementVector.Y < 0)
+	{
+		CustomCharacterMovementComponent->bWantsToCrouch = true;
+	}
+	
+}
+
 
 void ACustomCMCCharacter::Look(const FInputActionValue& Value)
 {
