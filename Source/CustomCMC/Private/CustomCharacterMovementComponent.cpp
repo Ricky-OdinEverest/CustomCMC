@@ -124,7 +124,7 @@ float UCustomCharacterMovementComponent::GetGravityZ() const
 	case CMOVE_Hang:
 		return 0.f;
 	case CMOVE_VertWallRun:
-		return Super::GetGravityZ();
+		return 0.0;
 	default:
 		UE_LOG(LogTemp, Fatal, TEXT("Invalid Movement Mode"))
 		return -1.f;
@@ -150,8 +150,21 @@ void UCustomCharacterMovementComponent::PhysCustom(float deltaTime, int32 Iterat
 	
 }
 
+void UCustomCharacterMovementComponent::EnterVertWallRun(EMovementMode PrevMode,
+	ECustomMovementMode PrevCustomMode)
+{
+	bOrientRotationToMovement = false;
+//	float VertWallRunEnterImpulse = 100.f;
+	//Velocity += Velocity.GetSafeNormal2D() * VertWallRunEnterImpulse;
+}
+
+void UCustomCharacterMovementComponent::ExitVertWallRun()
+{
+	bOrientRotationToMovement = true;
+}
+
 void UCustomCharacterMovementComponent::OnMovementModeChanged(EMovementMode PreviousMovementMode,
-	uint8 PreviousCustomMode)
+                                                              uint8 PreviousCustomMode)
 {
 	Super::OnMovementModeChanged(PreviousMovementMode, PreviousCustomMode);
 	
@@ -167,6 +180,11 @@ void UCustomCharacterMovementComponent::OnMovementModeChanged(EMovementMode Prev
 	{
 		bOrientRotationToMovement = true;
 	}
+
+	if (IsCustomMovementMode(CMOVE_VertWallRun)) EnterVertWallRun(PreviousMovementMode, (ECustomMovementMode)PreviousCustomMode);
+
+
+	if (PreviousMovementMode == MOVE_Custom && PreviousCustomMode == CMOVE_VertWallRun) ExitVertWallRun();
 
 	
 	// Checks if wall is on left or right for the simulated proxy
@@ -432,10 +450,7 @@ bool UCustomCharacterMovementComponent::TryMantle()
 	float CosMMWSA = FMath::Cos(FMath::DegreesToRadians(LedgeGrabMinWallSteepnessAngle));
 	float CosMMSA = FMath::Cos(FMath::DegreesToRadians(LedgeGrabMaxSurfaceAngle));
 	float CosMMAA = FMath::Cos(FMath::DegreesToRadians(LedgeGrabMaxAlignmentAngle));
-
 	
-	
-
 
 	// distance for eye line trace
 	const FVector WallEnd = BaseLoc + Fwd * MaxLedgeGrabDistance;
@@ -464,9 +479,14 @@ bool UCustomCharacterMovementComponent::TryMantle()
 	// Check Height
 	TArray<FHitResult> HeightHits;
 	FHitResult SurfaceHit;
+// Project up vector onto the wall plane
 	FVector WallUp = FVector::VectorPlaneProject(FVector::UpVector, FrontHit.Normal).GetSafeNormal();
+
+	// angle between upvector and hit normal in radians
 	float WallCos = FVector::UpVector | FrontHit.Normal;
+	
 	float WallSin = FMath::Sqrt(1 - WallCos * WallCos);
+	
 	FVector TraceStart = FrontHit.Location + Fwd + WallUp * (MaxHeight - (MaxStepHeight - 1)) / WallSin;
 	LINE(TraceStart, FrontHit.Location + Fwd, FColor::Orange)
 	if (!GetWorld()->LineTraceMultiByProfile(HeightHits, TraceStart, FrontHit.Location + Fwd, "BlockAll", Params)) return false;
@@ -1155,17 +1175,29 @@ bool UCustomCharacterMovementComponent::TryVertWallRun()
 {
 	//Not Falling? cant wall run
 	if (!IsFalling()) return false;
-	// If falling too fast you may not wall run
-	if (Velocity.Z < -MaxVerticalWallRunSpeed) return false;
-	FVector Start = UpdatedComponent->GetComponentLocation();
-	FVector FrontEnd = Start + UpdatedComponent->GetForwardVector() * CapR() * 3;
 	
+	// If falling too fast you may not wall run // current is 800
+	if (Velocity.Z < -MaxVerticalWallRunSpeed) return false;
+	
+	//Player Location
+	FVector Start = UpdatedComponent->GetComponentLocation();
+	
+	// Currently casting 1.5 capsules in front of the character
+	FVector FrontEnd = Start + UpdatedComponent->GetForwardVector() * CapR() * 3;
+	// Get Default Ignore params that include the character
 	auto Params = CustomCharacterOwner->GetIgnoreCharacterParams();
+
+	// Init Containers for hit results if any
 	FHitResult FloorHit, WallHit;
-	// Check Player Height
+
+	
+	// Check Player Height off the ground
 	if (GetWorld()->LineTraceSingleByProfile(FloorHit, Start, Start + FVector::DownVector * (CapHH() + MinWallRunHeight), "BlockAll", Params))
 	{
+
+
 		return false;
+		
 	}
 
 	// Front Ray Cast
@@ -1174,22 +1206,19 @@ bool UCustomCharacterMovementComponent::TryVertWallRun()
 	if (WallHit.IsValidBlockingHit() ) // && (Velocity | WallHit.Normal) > 0
 	{
 		Safe_bVertWallRun = true;
-	//	SLOG("if (WallHit.IsValidBlockingHit() && (Velocity | WallHit.Normal) < 0)")
+	
 	}
 	else
 	{
-	   //	SLOG("Wall Run Cast Is False")
+		//SLOG("Wall not Hit")
 		return false;
 		
 	}
-	
-	// clamp velocity to be parralell with the wall
-	FVector WallUp = FVector::VectorPlaneProject(Velocity, WallHit.Normal);
-	//FVector WallUp = FVector::VectorPlaneProject(FVector::UpVector, WallHit.Normal);
-	if (WallUp.SizeSquared() < pow(MinWallRunSpeed, 2)) return false;
+	FVector ProjectedVelocity = FVector::VectorPlaneProject(Velocity, WallHit.Normal);
+	if (Velocity.SizeSquared() < pow(MinWallRunSpeed, 2)) return false;
 	
 	// Passed all conditions
-	Velocity = WallUp;
+	Velocity = ProjectedVelocity;
 	// Prevent exagerated vertical and downward movemnt
 	//May have to update or modify climb
 	Velocity.Z = FMath::Clamp(Velocity.Z, 0.f, MaxVerticalWallRunSpeed);
@@ -1200,6 +1229,7 @@ bool UCustomCharacterMovementComponent::TryVertWallRun()
 
 void UCustomCharacterMovementComponent::PhysVertWallRun(float deltaTime, int32 Iterations)
 {
+	
 		// Substeping covered in prone
 	if (deltaTime < MIN_TICK_TIME)
 	{
@@ -1229,65 +1259,47 @@ void UCustomCharacterMovementComponent::PhysVertWallRun(float deltaTime, int32 I
 		FVector FrontEnd = Start + UpdatedComponent->GetForwardVector() * CapR() * 3;
 		auto Params = CustomCharacterOwner->GetIgnoreCharacterParams();
 
-		// should work if I pull back
-		float SinPullAwayAngle = FMath::Sin(FMath::DegreesToRadians(WallRunPullAwayAngle));
+		/*// should work if I pull back
+		float SinPullAwayAngle = FMath::Sin(FMath::DegreesToRadians(WallRunPullAwayAngle));*/
 		
 		FHitResult WallHit;
 		GetWorld()->LineTraceSingleByProfile(WallHit, Start, FrontEnd, "BlockAll", Params);
-		//  pulling away will exit the run
-		bool bWantsToPullAway = WallHit.IsValidBlockingHit() && !Acceleration.IsNearlyZero() && (Acceleration.GetSafeNormal() | WallHit.Normal) > SinPullAwayAngle;
-		if (!WallHit.IsValidBlockingHit() || bWantsToPullAway)
+
+
+
+		if (!WallHit.IsValidBlockingHit() )
 		{
 			SetMovementMode(MOVE_Falling);
 			// if you leave the wall start new physics in between the frames
 			StartNewPhysics(remainingTime, Iterations);
-			SLOG("Trip1")
+
 			return;
 		}
 
-		//Actual Physics Below
+				
+		FVector OriginalAcceleration = Acceleration;
 		
-		// Clamp Acceleration
-		//FVector WallUp = FVector::VectorPlaneProject(FVector::UpVector, WallHit.Normal);
-		Acceleration = FVector::VectorPlaneProject(Acceleration, WallHit.Normal);
-		// Removing Z acceleration will have to change
-		//Acceleration.Z = 0.f;
-		//Acceleration.Y = 0.f;
+		VertRunWallUpDirection = FVector::VectorPlaneProject(FVector::UpVector, WallHit.Normal).GetSafeNormal();
+		FVector WallRightDirection = FVector::CrossProduct(VertRunWallUpDirection, WallHit.Normal).GetSafeNormal();
+
+		/*Acceleration = (OriginalAcceleration | UpdatedComponent->GetForwardVector()) * WallUpDirection +
+			   (OriginalAcceleration | UpdatedComponent->GetRightVector()) * WallRightDirection;*/
+		
+		// Debug message for FVector accelDirection
+		GEngine->AddOnScreenDebugMessage(
+			11, // Using a new key to avoid conflicts
+			10.5f,
+			FColor::Purple, // Using a different color for clarity
+			FString::Printf(TEXT("AccelerationDirection After Wall Up: %s"), *Acceleration.ToString())
+		);
+
+
 		// Apply acceleration to velocity
 		CalcVelocity(timeTick, 0.f, false, GetMaxBrakingDeceleration());
-		// Project / Clamp Velocity tp Wall normal
-		Velocity = FVector::VectorPlaneProject(Velocity, WallHit.Normal);
-		// The "|" is a dot product operator here
-		// How Much Acceleration is Tangent To the wall
-		//float TangentAccel = Acceleration.GetSafeNormal() | Velocity.GetSafeNormal2D();
-
-		//float TangentAccel = Acceleration.GetSafeNormal() | Velocity.GetSafeNormal();
 		
-		
-		// true if up velocity greater than 0
-		bool bVelUp = Velocity.Z < 0.f;
+		////// Project / Clamp Velocity tp Wall normal
+		Velocity = FVector::VectorPlaneProject(Velocity,  WallHit.Normal);
 
-		// Gravity scales with how much the player is pulling away from the acceleratio
-		// If I am going up gravity is 0
-		//Velocity.Z += GetGravityZ() * WallRunGravityScaleCurve->GetFloatValue(bVelUp ? 0.f : TangentAccel) * timeTick;
-
-		FString AMsg = FString::Printf(TEXT("Acceleration: %s"), *Acceleration.ToString());
-		GEngine->AddOnScreenDebugMessage(
-		4,
-		10.5f,
-		FColor::Red,
-		AMsg
-	);
-		FString VMsg = FString::Printf(TEXT("Velocity: %s"), *Velocity.ToString());
-		GEngine->AddOnScreenDebugMessage(
-		2,
-		10.5f,
-		FColor::Red,
-		VMsg
-	);
-
-		// exit if too slow or falling too fast
-		// Mod 2D away in case it is only considering X and Y
 		if (Velocity.SizeSquared() < pow(MinWallRunSpeed, 2) || Velocity.Z < -MaxVerticalWallRunSpeed)
 		{
 			SetMovementMode(MOVE_Falling);
@@ -1343,7 +1355,7 @@ void UCustomCharacterMovementComponent::PhysVertWallRun(float deltaTime, int32 I
 	
 	if (FloorHit.IsValidBlockingHit() || !WallHit.IsValidBlockingHit() || Velocity.SizeSquared() < pow(MinWallRunSpeed, 2))
 	{
-		SLOG("HitFloor")
+		//SLOG("HitFloor")
 		SetMovementMode(MOVE_Falling);
 	}
 }

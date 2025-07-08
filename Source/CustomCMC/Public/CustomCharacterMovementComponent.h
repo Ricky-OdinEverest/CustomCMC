@@ -139,7 +139,11 @@ protected:
 	virtual float GetGravityZ() const override;
 	
 	virtual void PhysCustom(float deltaTime, int32 Iterations) override;
-	
+
+	void EnterVertWallRun(EMovementMode PrevMode, ECustomMovementMode PrevCustomMode);
+
+
+	void ExitVertWallRun();
 	virtual void OnMovementModeChanged(EMovementMode PreviousMovementMode, uint8 PreviousCustomMode) override;
 
 	// jump overrides used in wall run
@@ -233,9 +237,9 @@ protected:
 	// mAX sPEED ALONG WALL
 	UPROPERTY(EditDefaultsOnly) float MaxWallRunSpeed=800.f;
 	// Clamp Vertical speed and condition negative speed
-	UPROPERTY(EditDefaultsOnly) float MaxVerticalWallRunSpeed=200.f;
+	UPROPERTY(EditDefaultsOnly) float MaxVerticalWallRunSpeed=700.f;
 	// allow player to pull out of wall run under the given angle
-	UPROPERTY(EditDefaultsOnly) float WallRunPullAwayAngle=75;
+	UPROPERTY(EditDefaultsOnly) float WallRunPullAwayAngle=180;
 	// Pull player to wall with the given height
 	UPROPERTY(EditDefaultsOnly) float WallAttractionForce = 200.f;
 	// Requires Player to be this many units of the ground
@@ -244,6 +248,8 @@ protected:
 	UPROPERTY(EditDefaultsOnly) UCurveFloat* WallRunGravityScaleCurve;
 	// horozontal jump off force
 	UPROPERTY(EditDefaultsOnly) float WallJumpOffForce = 300.f;
+
+	FVector VertRunWallUpDirection;
 
 	// Wall Run Functions
 	UFUNCTION(BlueprintPure)

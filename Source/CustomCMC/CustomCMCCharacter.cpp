@@ -154,12 +154,26 @@ void ACustomCMCCharacter::HandleClimbMovementInput(const FInputActionValue& Valu
 
 void ACustomCMCCharacter::VertWallRunningMovementInput(const FInputActionValue& Value)
 {
-
+	FVector WallUp = CustomCharacterMovementComponent->VertRunWallUpDirection;
+	// find out which way is forward
+	const FRotator Rotation = GetController()->GetControlRotation();
+	const FRotator YawRotation(0, Rotation.Yaw, 0);
+	// get right vector 
+	const FVector RightDirection = FRotationMatrix(YawRotation).GetUnitAxis(EAxis::Y);
 	const FVector2D MovementVector = Value.Get<FVector2D>();
 	
 	//AddMovementInput( LedgeTangent, MovementVector.X );
+	//AddMovementInput( FVector::UpVector, MovementVector.Y );
+
+	AddMovementInput( WallUp, MovementVector.Y );
+	
+	AddMovementInput( RightDirection, MovementVector.X );
+
+
+
 
 	// Y axis input →  move up/down the wall
+	/*
 	if(MovementVector.Y >= 0)
 	{
 		AddMovementInput( FVector::UpVector, MovementVector.Y );
@@ -168,6 +182,7 @@ void ACustomCMCCharacter::VertWallRunningMovementInput(const FInputActionValue& 
 	{
 		CustomCharacterMovementComponent->bWantsToCrouch = true;
 	}
+	*/
 	
 }
 
